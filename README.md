@@ -166,3 +166,4 @@ You must use hcxdumptool only on networks you have permission to do this, becaus
 
 * Do not use tools like macchanger, as they are useless, because hcxdumptool uses its own random mac address space.
 # hcxdumptool
+# hcxdumptool
