@@ -52,6 +52,8 @@
 /*===========================================================================*/
 /* global var */
 
+static int data_truncate;
+
 static int fd_socket;
 static int fd_socket_gpsd;
 static int fd_pcapng;
@@ -111,6 +113,8 @@ static bool staytimeflag;
 static bool gpsdflag;
 static bool activescanflag;
 static bool rcascanflag;
+static bool channelhoppingflag;	//SHJ add channel hopping flag
+static bool ignorefcsflag; //SHJ add ignore bad fcs flag 
 static bool deauthenticationflag;
 static bool disassociationflag;
 static bool attackapflag;
@@ -131,6 +135,7 @@ static uint32_t mynicap;
 static uint32_t myouista;
 static uint32_t mynicsta;
 
+//static long int timestamp; //SHJ comment out
 static uint64_t timestamp;
 static uint64_t timestampstart;
 
@@ -693,10 +698,23 @@ epbhdr->block_type = EPBBID;
 epbhdr->interface_id = 0;
 epbhdr->cap_len = packet_len;
 epbhdr->org_len = packet_len;
+
+if (data_truncate!=0) //SHJ add truncate function
+	{
+	epbhdr->cap_len = data_truncate;
+	packet_len = data_truncate;
+	}
+
 epbhdr->timestamp_high = timestamp >> 32;
 epbhdr->timestamp_low = (uint32_t)timestamp;
+
+//printf(" Time= %"PRIu64" ", timestamp); //SHJ used for testing timestamp
+//printf("High=%"PRIu32" Low=%"PRIu32"\n",epbhdr->timestamp_high, epbhdr->timestamp_low ); //SHJ used for testing timestamp
+
 padding = (4 -(epbhdr->cap_len %4)) %4;
+
 epblen += packet_len;
+
 memset(&epb[epblen], 0, padding);
 epblen += padding;
 if(gpsdflag == true)
@@ -3857,6 +3875,17 @@ static long long int statuscount;
 static rth_t *rth;
 static fd_set readfds;
 static struct timeval tvfd;
+int rth_extended_presence; //SHJ Add extended presence counter
+uint32_t *rth_it_present_ptr; //SHJ add radio tap it_present field pointer
+uint8_t *rth_flags_ptr; //SHJ add radio tap flags field pointer	
+
+if(set_channel() != true) //SHJ add set channel - not sure if this makes any difference to set channel before dump
+	{
+	printf("\nfailed to set channel\n");
+	globalclose();
+	}
+
+activate_gpsd(); //SHJ add gpsd
 
 gettimeofday(&tv, NULL);
 timestamp = (tv.tv_sec * 1000000) + tv.tv_usec;
@@ -3869,9 +3898,11 @@ if(set_channel() == false)
 	fprintf(stderr, "\nfailed to set channel\n");
 	globalclose();
 	}
-send_undirected_proberequest();
+//send_undirected_proberequest(); //SHJ removed
+
 while(1)
 	{
+	data_truncate = 0; //SHJ add truncate function
 	#ifdef DOGPIOSUPPORT
 	if(digitalRead(7) == 1)
 		{
@@ -3921,7 +3952,10 @@ while(1)
 			errorcount++;
 			continue;
 			}
-		timestamp = (tv.tv_sec *1000000) +tv.tv_usec;
+		//timestamp = (tv.tv_sec * 1000000) + tv.tv_usec; //SHJ removed
+		timestamp = (tv.tv_sec); 
+		timestamp *= 1000000; 
+		timestamp += tv.tv_usec;
 		}
 	else
 		{
@@ -3933,7 +3967,7 @@ while(1)
 			digitalWrite(0, LOW);
 			}
 		#endif
-		if((statuscount %2) == 0)
+		if( ((statuscount %2) == 0) && (channelhoppingflag == true) ) //SHJ Check for channel hopping flag
 			{
 			printapinfo();
 			cpa++;
@@ -3943,7 +3977,7 @@ while(1)
 				}
 			if(set_channel() == true)
 				{
-				send_undirected_proberequest();
+				//send_undirected_proberequest(); //SHJ removed
 				}
 			else
 				{
@@ -3964,6 +3998,45 @@ while(1)
 	rth = (rth_t*)packet_ptr;
 	ieee82011_ptr = packet_ptr +le16toh(rth->it_len);
 	ieee82011_len = packet_len -le16toh(rth->it_len);
+	
+	if (ignorefcsflag == false) //SHJ add bad fcs checking unless optioned
+		{
+		rth_it_present_ptr = &rth->it_present; //SHJ copy radio tap it_present flag pointer
+		rth_extended_presence=0;
+		while ( ((*(rth_it_present_ptr+rth_extended_presence)) & 0x80) != 0) 
+			{ 
+			rth_extended_presence=rth_extended_presence+1;
+			}
+		rth_flags_ptr = (uint8_t*)(rth_it_present_ptr+rth_extended_presence);
+		//rth_flags_ptr = (rth_it_present_ptr+rth_extended_presence);		
+
+		if ( ( (*rth_it_present_ptr) & 0x01000000 ) != 0) 
+			{
+			//printf ("got time stamp ");
+			rth_flags_ptr = rth_flags_ptr + 12;
+			}
+		else 
+			{
+			//printf ("got no time stamp ");
+			rth_flags_ptr = rth_flags_ptr + 4;
+			}
+			
+		/*printf("%08" PRIx32 " ", *rth_it_present_ptr);
+		if ((*rth_it_present_ptr & 0x80) != 0) printf ("Extended | ");
+		printf("%08" PRIx32 " ", *(rth_it_present_ptr+1));
+		if ((*(rth_it_present_ptr+1) & 0x80) != 0) printf ("Extended | ");
+		printf("%08" PRIx32 " ", *(rth_it_present_ptr+2));
+		if ((*(rth_it_present_ptr+2) & 0x80) != 0) printf ("Extended | "); else printf(" | ");
+		printf("it_presence=%d | ", rth_extended_presence);
+		printf("Flag=0x%x\r", *(rth_flags_ptr));*/
+			
+		if ( (*(rth_flags_ptr) & 0x40) != 0) 
+			{
+			//printf("Invalid FCS - Flag=0x%x\r\n", *(rth_flags_ptr));
+			continue;
+			}
+		}
+
 	if(rth->it_present == 0)
 		{
 		continue;
@@ -3988,13 +4061,26 @@ while(1)
 		{
 		if(macfrx->subtype == IEEE80211_STYPE_BEACON)
 			{
-			process80211rcascanbeacon();
+			//process80211rcascanbeacon(); //SHJ removed
 			}
 		else if(macfrx->subtype == IEEE80211_STYPE_PROBE_RESP)
 			{
-			process80211rcascanproberesponse();
+			//process80211rcascanproberesponse(); //SHJ removed
 			}
 		 }
+	if(macfrx->type == IEEE80211_FTYPE_DATA) //SHJ add truncate 802.11 DATA
+		{
+		if( (macfrx->subtype == IEEE80211_STYPE_DATA) || (macfrx->subtype == IEEE80211_STYPE_DATA_CFACK) || (macfrx->subtype == IEEE80211_STYPE_DATA_CFPOLL) || (macfrx->subtype == IEEE80211_STYPE_DATA_CFACKPOLL) ) //SHJ add truncate for DATA 802.11 subtype
+			{
+			data_truncate = (packet_len-ieee82011_len) + 24;
+			//printf("\nIEEE80211_STYPE_DATA %d\n",data_truncate); //SHJ used for testing truncate DATA 802.11 subtype
+			}
+		else if ( (macfrx->subtype == IEEE80211_STYPE_QOS_DATA) || (macfrx->subtype == IEEE80211_STYPE_QOS_DATA_CFACK) || (macfrx->subtype == IEEE80211_STYPE_QOS_DATA_CFPOLL) || (macfrx->subtype == IEEE80211_STYPE_QOS_DATA_CFACKPOLL) ) //SHJ add truncate for QOS 802.11 subtype
+			{
+			data_truncate = (packet_len-ieee82011_len) + 26;
+			//printf("\nIEEE80211_STYPE_QOS_DATA %d\n",data_truncate); //SHJ used for testing truncate QOS 802.11 subtype
+			}
+		}
 	if(fd_rcascanpcapng != 0)
 		{
 		writeepb(fd_rcascanpcapng);
@@ -4587,6 +4673,7 @@ __attribute__ ((noreturn))
 static inline void usage(char *eigenname)
 {
 printf("%s %s (C) %s ZeroBeat\n"
+	"modified 10-Feburary-2018\n"
 	"usage  : %s <options>\n"
 	"example: %s -o output.pcapng -i wlp39s0f3u4u5 -t 5 --enable_status=3\n"
 	"         do not run hcxdumptool on logical interfaces (monx, wlanxmon)\n"
@@ -4692,10 +4779,14 @@ printf("%s %s (C) %s ZeroBeat\n"
 	"                                     6: Cisco Systems, Inc\n"
 	"--use_gpsd                         : use GPSD to retrieve position\n"
 	"                                     add latitude, longitude and altitude to every pcapng frame\n"
+        "                                     retrieve GPS information with hcxpcpatool or:\n"
+	"                                     tshark -r capturefile.pcapng -Y frame.comment -T fields -E header=y -e frame.number -e frame.time -e wlan.sa -e frame.comment\n"
 	"--save_rcascan=<file>              : output rca scan list to file when hcxdumptool terminated\n"
-	"--save_rcascan_raw=<file>          : output file in pcapngformat\n"
+	"--save_rcascan_raw=<file>          : output file in pcapng format\n"
 	"                                     unfiltered packets\n"
 	"                                     including radiotap header (LINKTYPE_IEEE802_11_RADIOTAP)\n"
+	"--disable_channel_hopping          : disable channel hopping (airodump-ng channel control)\n"	
+	"--ignore_fcs                       : accept packets with bad fcs\n"	
 	"--enable_status=<digit>            : enable status messages\n"
 	"                                     bitmask:\n"
 	"                                      1: EAPOL\n"
@@ -4703,6 +4794,7 @@ printf("%s %s (C) %s ZeroBeat\n"
 	"                                      4: AUTHENTICATON\n"
 	"                                      8: ASSOCIATION\n"
 	"                                     16: BEACON\n"
+        "                                     example: 3 = show EAPOL and PROBEREQUEST/PROBERESPONSE\n"
 	"--poweroff                         : once hcxdumptool terminated, power off system\n"
 	"--help                             : show this help\n"
 	"--version                          : show version\n"
@@ -4731,6 +4823,7 @@ static unsigned long long int apmac;
 static unsigned long long int stationmac;
 static struct ifreq ifr;
 
+data_truncate = 0;	//SHJ Add truncate
 maxerrorcount = ERRORMAX;
 staytime = TIME_INTERVAL;
 eapoltimeout = EAPOLTIMEOUT;
@@ -4747,6 +4840,8 @@ gpsdflag = false;
 staytimeflag = false;
 activescanflag = false;
 rcascanflag = false;
+channelhoppingflag = true; //SHJ Add channel hopping flag
+ignorefcsflag = false; //SHJ Ignore bad fcs flag
 deauthenticationflag = false;
 disassociationflag = false;
 attackapflag = false;
@@ -4764,6 +4859,7 @@ ippcapngoutname = NULL;
 weppcapngoutname = NULL;
 filterlistname = NULL;
 rcascanpcapngname = NULL;
+
 
 static const char *short_options = "i:o:O:W:c:t:T:E:D:A:IChv";
 static const struct option long_options[] =
@@ -4784,7 +4880,9 @@ static const struct option long_options[] =
 	{"do_rcascan",			no_argument,		NULL,	HCXD_DO_RCASCAN},
 	{"save_rcascan",		required_argument,	NULL,	HCXD_SAVE_RCASCAN},
 	{"save_rcascan_raw",		required_argument,	NULL,	HCXD_SAVE_RCASCAN_RAW},
-	{"enable_status",		required_argument,	NULL,	HCXD_ENABLE_STATUS},
+	{"enable_status",		required_argument,	NULL,	HCXD_ENABLE_STATUS},		
+	{"disable_channel_hopping",	no_argument,		NULL,	HCXD_DISABLE_CHANNEL_HOPPING}, //SHJ add disable channel hopping
+	{"ignore_fcs",			no_argument,		NULL,	HCXD_IGNORE_FCS}, //SHJ add ingnore fcs
 	{"poweroff",			no_argument,		NULL,	HCXD_POWER_OFF},
 	{"version",			no_argument,		NULL,	HCXD_VERSION},
 	{"help",			no_argument,		NULL,	HCXD_HELP},
@@ -4893,6 +4991,14 @@ while((auswahl = getopt_long(argc, argv, short_options, long_options, &index)) !
 		rcascanflag = true;
 		rcascanpcapngname = optarg;
 		break;
+
+		case HCXD_DISABLE_CHANNEL_HOPPING: //SHJ Add check for channel hopping flag
+		channelhoppingflag = false;
+		break;
+
+		case HCXD_IGNORE_FCS: //SHJ add disable bad fcs flag
+		ignorefcsflag = true;
+		break;		
 
 		case HCXD_ENABLE_STATUS:
 		statusout |= strtol(optarg, NULL, 10);
@@ -5063,11 +5169,14 @@ if(showchannels == true)
 	globalclose();
 	}
 
-test_channels();
-if(channelscanlist[0] == 0)
+if(channelhoppingflag == true)  //SHJ Add check for channel hopping flag
 	{
-	fprintf(stderr, "no available channel found in scan list\n");
-	globalclose();
+	test_channels();
+	if(channelscanlist[0] == 0)
+		{
+		fprintf(stderr, "no available channel found in scan list\n");
+		globalclose();
+		}
 	}
 
 if(rcascanflag == false)

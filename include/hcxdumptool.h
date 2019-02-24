@@ -59,6 +59,8 @@
 #define HCXD_SAVE_RCASCAN_RAW		16
 #define HCXD_ENABLE_STATUS		17
 #define HCXD_POWER_OFF			18
+#define HCXD_DISABLE_CHANNEL_HOPPING	19 //SHJ Add disable channel hopping flag
+#define HCXD_IGNORE_FCS			20 //SHJ Add ignore bad fcs flag
 
 #define HCXD_HELP			'h'
 #define HCXD_VERSION			'v'
