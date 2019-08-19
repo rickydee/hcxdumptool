@@ -31,7 +31,10 @@
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
-#include <arpa/inet.h>  
+#ifdef __GLIBC__
+# include <net/ethernet.h>
+# include <netinet/if_ether.h>
+#endif
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <netpacket/packet.h>
@@ -4072,12 +4075,18 @@ while(1)
 		{
 		if( (macfrx->subtype == IEEE80211_STYPE_DATA) || (macfrx->subtype == IEEE80211_STYPE_DATA_CFACK) || (macfrx->subtype == IEEE80211_STYPE_DATA_CFPOLL) || (macfrx->subtype == IEEE80211_STYPE_DATA_CFACKPOLL) ) //SHJ add truncate for DATA 802.11 subtype
 			{
-			data_truncate = (packet_len-ieee82011_len) + 24;
+			if((macfrx->from_ds == 1) && (macfrx->to_ds == 1)) //SHJ where To DS=1, From DS=1 (WDS) - include all MAC address fields
+				data_truncate = (packet_len-ieee82011_len) + 30;
+			else
+				data_truncate = (packet_len-ieee82011_len) + 24; //SHJ other combinations of To DS, From DS - use 3 MAC address fields
 			//printf("\nIEEE80211_STYPE_DATA %d\n",data_truncate); //SHJ used for testing truncate DATA 802.11 subtype
 			}
 		else if ( (macfrx->subtype == IEEE80211_STYPE_QOS_DATA) || (macfrx->subtype == IEEE80211_STYPE_QOS_DATA_CFACK) || (macfrx->subtype == IEEE80211_STYPE_QOS_DATA_CFPOLL) || (macfrx->subtype == IEEE80211_STYPE_QOS_DATA_CFACKPOLL) ) //SHJ add truncate for QOS 802.11 subtype
-			{
-			data_truncate = (packet_len-ieee82011_len) + 26;
+			{	
+			if((macfrx->from_ds == 1) && (macfrx->to_ds == 1)) //SHJ where DS=1, From DS=1 (WDS) - include all MAC address fields
+				data_truncate = (packet_len-ieee82011_len) + 32;
+			else
+				data_truncate = (packet_len-ieee82011_len) + 26; //SHJ other combinations of To DS, From DS - use 3 MAC address fields
 			//printf("\nIEEE80211_STYPE_QOS_DATA %d\n",data_truncate); //SHJ used for testing truncate QOS 802.11 subtype
 			}
 		}
@@ -4673,7 +4682,7 @@ __attribute__ ((noreturn))
 static inline void usage(char *eigenname)
 {
 printf("%s %s (C) %s ZeroBeat\n"
-	"modified 10-Feburary-2018\n"
+	"modified 31-July-2019\n"
 	"usage  : %s <options>\n"
 	"example: %s -o output.pcapng -i wlp39s0f3u4u5 -t 5 --enable_status=3\n"
 	"         do not run hcxdumptool on logical interfaces (monx, wlanxmon)\n"
