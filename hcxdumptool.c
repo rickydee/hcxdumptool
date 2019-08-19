@@ -31,10 +31,7 @@
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
-#ifdef __GLIBC__
-# include <net/ethernet.h>
-# include <netinet/if_ether.h>
-#endif
+#include <arpa/inet.h>
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <netpacket/packet.h>
