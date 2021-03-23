@@ -31,7 +31,10 @@
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
-#include <arpa/inet.h>
+#ifdef __GLIBC__
+# include <net/ethernet.h>
+# include <netinet/if_ether.h>
+#endif
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <netpacket/packet.h>
@@ -4003,32 +4006,48 @@ while(1)
 		{
 		rth_it_present_ptr = &rth->it_present; //SHJ copy radio tap it_present flag pointer
 		rth_extended_presence=0;
-		while ( ((*(rth_it_present_ptr+rth_extended_presence)) & 0x80) != 0) 
+
+		if ( (rth->it_version !=0) || (rth->it_pad !=0) )
+			{
+			//printf ("radiotap version invalid\r\n");
+			continue;
+			}
+
+		//while ( ((*(rth_it_present_ptr+rth_extended_presence)) & 0x80) != 0) 
+		while ( ((*(rth_it_present_ptr+rth_extended_presence)) & 0x80000000) != 0) 
 			{ 
 			rth_extended_presence=rth_extended_presence+1;
 			}
 		rth_flags_ptr = (uint8_t*)(rth_it_present_ptr+rth_extended_presence);
-		//rth_flags_ptr = (rth_it_present_ptr+rth_extended_presence);		
+		//rth_flags_ptr = (rth_it_present_ptr+rth_extended_presence);	
 
-		if ( ( (*rth_it_present_ptr) & 0x01000000 ) != 0) 
+		if ( ( (*rth_it_present_ptr) & 0x00100000 ) != 0) // Allow for A-MPDU if present
 			{
-			//printf ("got time stamp ");
-			rth_flags_ptr = rth_flags_ptr + 12;
+			//printf ("A-MPDU present | ");
+			rth_flags_ptr = rth_flags_ptr + 4;
+			}	
+
+		if ( ( (*rth_it_present_ptr) & 0x04000000 ) != 0) // Allow for time stamp if present
+			{
+			//printf ("time stamp present | ");
+			rth_flags_ptr = rth_flags_ptr + 20; //was 12
 			}
 		else 
 			{
-			//printf ("got no time stamp ");
-			rth_flags_ptr = rth_flags_ptr + 4;
+			//printf ("no time stamp | ");
+			rth_flags_ptr = rth_flags_ptr + 12; //was 4
 			}
 			
 		/*printf("%08" PRIx32 " ", *rth_it_present_ptr);
-		if ((*rth_it_present_ptr & 0x80) != 0) printf ("Extended | ");
+		if ((*rth_it_present_ptr & 0x80000000) != 0) printf ("Extended | ");
 		printf("%08" PRIx32 " ", *(rth_it_present_ptr+1));
-		if ((*(rth_it_present_ptr+1) & 0x80) != 0) printf ("Extended | ");
+		if ((*(rth_it_present_ptr+1) & 0x80000000) != 0) printf ("Extended | ");
 		printf("%08" PRIx32 " ", *(rth_it_present_ptr+2));
-		if ((*(rth_it_present_ptr+2) & 0x80) != 0) printf ("Extended | "); else printf(" | ");
-		printf("it_presence=%d | ", rth_extended_presence);
-		printf("Flag=0x%x\r", *(rth_flags_ptr));*/
+		if ((*(rth_it_present_ptr+2) & 0x80000000) != 0) printf ("Extended | "); else printf(" | ");
+		printf("%08" PRIx32 " ", *(rth_it_present_ptr+3));
+		if ((*(rth_it_present_ptr+3) & 0x80000000) != 0) printf ("Extended | "); else printf(" | ");
+		printf("%08" PRIx32 " ", *(rth_it_present_ptr+4)); 
+		printf("Flag=0x%x\r\n", *(rth_flags_ptr));*/
 			
 		if ( (*(rth_flags_ptr) & 0x40) != 0) 
 			{
@@ -4072,21 +4091,22 @@ while(1)
 		{
 		if( (macfrx->subtype == IEEE80211_STYPE_DATA) || (macfrx->subtype == IEEE80211_STYPE_DATA_CFACK) || (macfrx->subtype == IEEE80211_STYPE_DATA_CFPOLL) || (macfrx->subtype == IEEE80211_STYPE_DATA_CFACKPOLL) ) //SHJ add truncate for DATA 802.11 subtype
 			{
-			if((macfrx->from_ds == 1) && (macfrx->to_ds == 1)) //SHJ where To DS=1, From DS=1 (WDS) - include all MAC address fields
-				data_truncate = (packet_len-ieee82011_len) + 30;
-			else
-				data_truncate = (packet_len-ieee82011_len) + 24; //SHJ other combinations of To DS, From DS - use 3 MAC address fields
+			data_truncate = (packet_len-ieee82011_len) + MAC_SIZE_NORM;
+			if ((macfrx->from_ds == 1) && (macfrx->to_ds == 1))
+				{
+				data_truncate = (packet_len-ieee82011_len) + MAC_SIZE_LONG;
+				//printf("From DS=1 & To DS=1\r\n");
+				} 
 			//printf("\nIEEE80211_STYPE_DATA %d\n",data_truncate); //SHJ used for testing truncate DATA 802.11 subtype
 			}
 		else if ( (macfrx->subtype == IEEE80211_STYPE_QOS_DATA) || (macfrx->subtype == IEEE80211_STYPE_QOS_DATA_CFACK) || (macfrx->subtype == IEEE80211_STYPE_QOS_DATA_CFPOLL) || (macfrx->subtype == IEEE80211_STYPE_QOS_DATA_CFACKPOLL) ) //SHJ add truncate for QOS 802.11 subtype
-			{	
-			if((macfrx->from_ds == 1) && (macfrx->to_ds == 1)) //SHJ where DS=1, From DS=1 (WDS) - include all MAC address fields
-				data_truncate = (packet_len-ieee82011_len) + 32;
-			else
-				data_truncate = (packet_len-ieee82011_len) + 26; //SHJ other combinations of To DS, From DS - use 3 MAC address fields
+			{
+			//data_truncate = (packet_len-ieee82011_len) + 26;
+			data_truncate = (packet_len-ieee82011_len) + MAC_SIZE_QOS;
 			//printf("\nIEEE80211_STYPE_QOS_DATA %d\n",data_truncate); //SHJ used for testing truncate QOS 802.11 subtype
 			}
 		}
+
 	if(fd_rcascanpcapng != 0)
 		{
 		writeepb(fd_rcascanpcapng);
@@ -4679,7 +4699,7 @@ __attribute__ ((noreturn))
 static inline void usage(char *eigenname)
 {
 printf("%s %s (C) %s ZeroBeat\n"
-	"modified 31-July-2019\n"
+	"modified 25-November-2020\n"
 	"usage  : %s <options>\n"
 	"example: %s -o output.pcapng -i wlp39s0f3u4u5 -t 5 --enable_status=3\n"
 	"         do not run hcxdumptool on logical interfaces (monx, wlanxmon)\n"
